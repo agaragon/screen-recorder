@@ -15,7 +15,7 @@ import java.util.List;
 
 class VideoSplitter {
 
-    static final long STORY_MAX_US = 15_000_000L; // 15 seconds in microseconds
+    static final long STORY_MAX_US = 50_000_000L; // 50 seconds in microseconds
 
     /**
      * Splits the video at pathOrUri into chunks of at most maxUs microseconds,
