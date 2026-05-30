@@ -69,9 +69,10 @@ public class ScreenRecorderService extends Service {
             case ACTION_START:
                 startForeground(NOTIFICATION_ID, buildNotification());
 
-                screenWidth  = intent.getIntExtra(EXTRA_SCREEN_WIDTH,  1080);
-                screenHeight = intent.getIntExtra(EXTRA_SCREEN_HEIGHT, 1920);
-                screenDpi    = intent.getIntExtra(EXTRA_SCREEN_DPI,    320);
+                // Align to 16 immediately so every downstream user gets consistent values
+                screenWidth  = alignTo16(intent.getIntExtra(EXTRA_SCREEN_WIDTH,  1080));
+                screenHeight = alignTo16(intent.getIntExtra(EXTRA_SCREEN_HEIGHT, 1920));
+                screenDpi    = intent.getIntExtra(EXTRA_SCREEN_DPI, 320);
 
                 int    resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED);
                 Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
@@ -134,6 +135,7 @@ public class ScreenRecorderService extends Service {
             mediaRecorder.setOutputFile(buildOutputFilePath());
         }
 
+        // screenWidth/Height are already aligned to 16 in onStartCommand
         mediaRecorder.setVideoSize(screenWidth, screenHeight);
         mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
         mediaRecorder.setVideoEncodingBitRate(5 * 1024 * 1024);
@@ -155,7 +157,7 @@ public class ScreenRecorderService extends Service {
                 null, null);
 
         mediaRecorder.start();
-        Log.i(TAG, "Recording started");
+        Log.i(TAG, "Recording started at " + screenWidth + "x" + screenHeight);
     }
 
     private void stopRecording() {
@@ -191,6 +193,11 @@ public class ScreenRecorderService extends Service {
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    /** H.264 hardware encoders require width and height to be multiples of 16. */
+    private static int alignTo16(int value) {
+        return (value / 16) * 16;
+    }
 
     private String buildOutputFilePath() {
         File moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
