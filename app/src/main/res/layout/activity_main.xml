@@ -20,4 +20,19 @@
         android:layout_height="wrap_content"
         android:text="@string/start_recording" />
 
+    <Button
+        android:id="@+id/btnChooseFolder"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/choose_folder" />
+
+    <TextView
+        android:id="@+id/tvSaveFolder"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textSize="12sp"
+        android:textColor="?android:attr/textColorSecondary" />
+
 </LinearLayout>

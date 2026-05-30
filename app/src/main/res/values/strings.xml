@@ -9,4 +9,7 @@
     <string name="channel_name">Screen Recording</string>
     <string name="notification_title">Screen Recorder</string>
     <string name="notification_text">Recording in progress</string>
+    <string name="choose_folder">Choose Save Folder</string>
+    <string name="save_folder_default">Save to: Movies (default)</string>
+    <string name="save_folder_custom">Save to: %s</string>
 </resources>
