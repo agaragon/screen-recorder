@@ -14,7 +14,9 @@ import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.util.Log;
@@ -53,6 +55,19 @@ public class ScreenRecorderService extends Service {
     private int screenHeight;
     private int screenDpi;
 
+    // Callback required on Android 14+ — stops the service if the projection
+    // is revoked externally (e.g. user pulls down the status bar tile)
+    private final MediaProjection.Callback projectionCallback =
+            new MediaProjection.Callback() {
+                @Override
+                public void onStop() {
+                    Log.i(TAG, "MediaProjection stopped externally");
+                    stopRecording();
+                    stopForeground(true);
+                    stopSelf();
+                }
+            };
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -69,7 +84,6 @@ public class ScreenRecorderService extends Service {
             case ACTION_START:
                 startForeground(NOTIFICATION_ID, buildNotification());
 
-                // Align to 16 immediately so every downstream user gets consistent values
                 screenWidth  = alignTo16(intent.getIntExtra(EXTRA_SCREEN_WIDTH,  1080));
                 screenHeight = alignTo16(intent.getIntExtra(EXTRA_SCREEN_HEIGHT, 1920));
                 screenDpi    = intent.getIntExtra(EXTRA_SCREEN_DPI, 320);
@@ -77,6 +91,16 @@ public class ScreenRecorderService extends Service {
                 int    resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED);
                 Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
                 mediaProjection   = projectionManager.getMediaProjection(resultCode, resultData);
+
+                if (mediaProjection == null) {
+                    Log.e(TAG, "getMediaProjection returned null — aborting");
+                    stopSelf();
+                    return START_NOT_STICKY;
+                }
+
+                // Must be registered before createVirtualDisplay on Android 14+
+                mediaProjection.registerCallback(
+                        projectionCallback, new Handler(Looper.getMainLooper()));
 
                 startRecording(intent.getStringExtra(EXTRA_OUTPUT_URI));
                 break;
@@ -108,7 +132,11 @@ public class ScreenRecorderService extends Service {
     // -----------------------------------------------------------------------
 
     private void startRecording(String outputUriString) {
-        mediaRecorder = new MediaRecorder();
+        // Use MediaRecorder(Context) on API 31+; no-arg constructor is deprecated there
+        mediaRecorder = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                ? new MediaRecorder(this)
+                : new MediaRecorder();
+
         mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
         mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
 
@@ -135,7 +163,6 @@ public class ScreenRecorderService extends Service {
             mediaRecorder.setOutputFile(buildOutputFilePath());
         }
 
-        // screenWidth/Height are already aligned to 16 in onStartCommand
         mediaRecorder.setVideoSize(screenWidth, screenHeight);
         mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
         mediaRecorder.setVideoEncodingBitRate(5 * 1024 * 1024);
@@ -163,7 +190,7 @@ public class ScreenRecorderService extends Service {
     private void stopRecording() {
         if (mediaRecorder != null) {
             try { mediaRecorder.stop(); }
-            catch (RuntimeException e) { Log.w(TAG, "stop() failed — probably never started", e); }
+            catch (RuntimeException e) { Log.w(TAG, "stop() failed", e); }
             mediaRecorder.release();
             mediaRecorder = null;
         }
@@ -176,6 +203,7 @@ public class ScreenRecorderService extends Service {
         }
 
         if (mediaProjection != null) {
+            mediaProjection.unregisterCallback(projectionCallback);
             mediaProjection.stop();
             mediaProjection = null;
         }
