@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Screen Recorder</string>
+    <string name="status_idle">Idle — not recording</string>
+    <string name="status_recording">Recording…</string>
+    <string name="start_recording">Start Recording</string>
+    <string name="stop_recording">Stop Recording</string>
+    <string name="channel_id">screen_recorder_channel</string>
+    <string name="channel_name">Screen Recording</string>
+    <string name="notification_title">Screen Recorder</string>
+    <string name="notification_text">Recording in progress</string>
+</resources>
