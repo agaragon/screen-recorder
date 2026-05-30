@@ -17,16 +17,24 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String PREFS_NAME = "screen_recorder_prefs";
-    private static final String KEY_OUTPUT_URI = "output_uri";
+    private static final String PREFS_NAME         = "screen_recorder_prefs";
+    private static final String KEY_OUTPUT_URI     = "output_uri";
+    private static final String KEY_LAST_RECORDING = "last_recording";
+    private static final String AUTHORITY          = "com.example.screenrecorder.fileprovider";
 
     private MediaProjectionManager projectionManager;
     private boolean isRecording = false;
 
-    private Button btnToggle;
+    private Button   btnToggle;
+    private Button   btnShare;
     private TextView tvStatus;
     private TextView tvSaveFolder;
 
@@ -38,16 +46,13 @@ public class MainActivity extends AppCompatActivity {
             registerForActivityResult(
                     new ActivityResultContracts.StartActivityForResult(),
                     result -> {
-                        if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                        if (result.getResultCode() == RESULT_OK && result.getData() != null)
                             startRecordingService(result.getResultCode(), result.getData());
-                        } else {
-                            Toast.makeText(this,
-                                    "Screen capture permission denied.", Toast.LENGTH_SHORT).show();
-                        }
+                        else
+                            Toast.makeText(this, "Screen capture permission denied.",
+                                    Toast.LENGTH_SHORT).show();
                     });
 
-    // Chains back into checkPermissionsAndStartRecording so the audio
-    // permission check runs next regardless of whether this was granted.
     private final ActivityResultLauncher<String> notificationPermissionLauncher =
             registerForActivityResult(
                     new ActivityResultContracts.RequestPermission(),
@@ -57,14 +62,11 @@ public class MainActivity extends AppCompatActivity {
             registerForActivityResult(
                     new ActivityResultContracts.RequestPermission(),
                     granted -> {
-                        if (granted) {
-                            requestScreenCapturePermission();
-                        } else {
+                        if (!granted)
                             Toast.makeText(this,
                                     "Microphone permission denied — audio will not be recorded.",
                                     Toast.LENGTH_LONG).show();
-                            requestScreenCapturePermission();
-                        }
+                        requestScreenCapturePermission();
                     });
 
     private final ActivityResultLauncher<Uri> folderPickerLauncher =
@@ -88,10 +90,10 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        projectionManager =
-                (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+        projectionManager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
 
         btnToggle    = findViewById(R.id.btnToggle);
+        btnShare     = findViewById(R.id.btnShare);
         tvStatus     = findViewById(R.id.tvStatus);
         tvSaveFolder = findViewById(R.id.tvSaveFolder);
 
@@ -100,12 +102,21 @@ public class MainActivity extends AppCompatActivity {
             else             checkPermissionsAndStartRecording();
         });
 
+        btnShare.setOnClickListener(v -> shareLastRecording());
+
         findViewById(R.id.btnChooseFolder).setOnClickListener(v -> {
             String saved = prefs().getString(KEY_OUTPUT_URI, null);
             folderPickerLauncher.launch(saved != null ? Uri.parse(saved) : null);
         });
 
         updateFolderLabel();
+        updateShareButton();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateShareButton();
     }
 
     // -----------------------------------------------------------------------
@@ -139,32 +150,96 @@ public class MainActivity extends AppCompatActivity {
     private void startRecordingService(int resultCode, Intent data) {
         DisplayMetrics metrics = getResources().getDisplayMetrics();
 
-        Intent serviceIntent = new Intent(this, ScreenRecorderService.class);
-        serviceIntent.setAction(ScreenRecorderService.ACTION_START);
-        serviceIntent.putExtra(ScreenRecorderService.EXTRA_RESULT_CODE,   resultCode);
-        serviceIntent.putExtra(ScreenRecorderService.EXTRA_RESULT_DATA,   data);
-        serviceIntent.putExtra(ScreenRecorderService.EXTRA_SCREEN_WIDTH,  metrics.widthPixels);
-        serviceIntent.putExtra(ScreenRecorderService.EXTRA_SCREEN_HEIGHT, metrics.heightPixels);
-        serviceIntent.putExtra(ScreenRecorderService.EXTRA_SCREEN_DPI,    metrics.densityDpi);
+        Intent si = new Intent(this, ScreenRecorderService.class);
+        si.setAction(ScreenRecorderService.ACTION_START);
+        si.putExtra(ScreenRecorderService.EXTRA_RESULT_CODE,   resultCode);
+        si.putExtra(ScreenRecorderService.EXTRA_RESULT_DATA,   data);
+        si.putExtra(ScreenRecorderService.EXTRA_SCREEN_WIDTH,  metrics.widthPixels);
+        si.putExtra(ScreenRecorderService.EXTRA_SCREEN_HEIGHT, metrics.heightPixels);
+        si.putExtra(ScreenRecorderService.EXTRA_SCREEN_DPI,    metrics.densityDpi);
 
         String outputUri = prefs().getString(KEY_OUTPUT_URI, null);
-        if (outputUri != null) {
-            serviceIntent.putExtra(ScreenRecorderService.EXTRA_OUTPUT_URI, outputUri);
-        }
+        if (outputUri != null) si.putExtra(ScreenRecorderService.EXTRA_OUTPUT_URI, outputUri);
 
-        ContextCompat.startForegroundService(this, serviceIntent);
-
+        ContextCompat.startForegroundService(this, si);
         isRecording = true;
         updateUI();
     }
 
     private void stopRecording() {
-        Intent serviceIntent = new Intent(this, ScreenRecorderService.class);
-        serviceIntent.setAction(ScreenRecorderService.ACTION_STOP);
-        startService(serviceIntent);
-
+        Intent si = new Intent(this, ScreenRecorderService.class);
+        si.setAction(ScreenRecorderService.ACTION_STOP);
+        startService(si);
         isRecording = false;
         updateUI();
+    }
+
+    // -----------------------------------------------------------------------
+    // Instagram Stories sharing
+    // -----------------------------------------------------------------------
+
+    private void shareLastRecording() {
+        String lastRecording = prefs().getString(KEY_LAST_RECORDING, null);
+        if (lastRecording == null) {
+            Toast.makeText(this, R.string.no_recording, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        btnShare.setEnabled(false);
+        Toast.makeText(this, R.string.preparing_video, Toast.LENGTH_SHORT).show();
+
+        File chunksDir = new File(getExternalCacheDir(), "video_chunks");
+        deleteDir(chunksDir);
+
+        new Thread(() -> {
+            try {
+                List<File> chunks = VideoSplitter.split(
+                        this, lastRecording, chunksDir, VideoSplitter.STORY_MAX_US);
+                runOnUiThread(() -> {
+                    updateShareButton();
+                    shareChunks(chunks);
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    updateShareButton();
+                    Toast.makeText(this, "Failed to prepare video: " + e.getMessage(),
+                            Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+
+    private void shareChunks(List<File> chunks) {
+        if (chunks.size() == 1) {
+            Uri uri = FileProvider.getUriForFile(this, AUTHORITY, chunks.get(0));
+
+            Intent igIntent = new Intent("com.instagram.share.ADD_TO_STORY");
+            igIntent.setDataAndType(uri, "video/mp4");
+            igIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+            if (getPackageManager().resolveActivity(
+                    igIntent, PackageManager.MATCH_DEFAULT_ONLY) != null) {
+                startActivity(igIntent);
+            } else {
+                Intent share = new Intent(Intent.ACTION_SEND);
+                share.setType("video/mp4");
+                share.putExtra(Intent.EXTRA_STREAM, uri);
+                share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(Intent.createChooser(share, getString(R.string.share_title)));
+            }
+        } else {
+            Toast.makeText(this,
+                    getString(R.string.split_into_parts, chunks.size()),
+                    Toast.LENGTH_LONG).show();
+            ArrayList<Uri> uris = new ArrayList<>();
+            for (File chunk : chunks)
+                uris.add(FileProvider.getUriForFile(this, AUTHORITY, chunk));
+            Intent share = new Intent(Intent.ACTION_SEND_MULTIPLE);
+            share.setType("video/mp4");
+            share.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(share, getString(R.string.share_title)));
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -177,16 +252,29 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateFolderLabel() {
         String uriString = prefs().getString(KEY_OUTPUT_URI, null);
-        if (uriString == null) {
+        if (uriString == null)
             tvSaveFolder.setText(getString(R.string.save_folder_default));
-        } else {
-            String segment = Uri.parse(uriString).getLastPathSegment();
-            tvSaveFolder.setText(getString(R.string.save_folder_custom, segment));
+        else {
+            String seg = Uri.parse(uriString).getLastPathSegment();
+            tvSaveFolder.setText(getString(R.string.save_folder_custom, seg));
         }
+    }
+
+    private void updateShareButton() {
+        boolean hasRecording = prefs().getString(KEY_LAST_RECORDING, null) != null;
+        btnShare.setEnabled(hasRecording && !isRecording);
     }
 
     private void updateUI() {
         tvStatus.setText(isRecording ? R.string.status_recording : R.string.status_idle);
         btnToggle.setText(isRecording ? R.string.stop_recording  : R.string.start_recording);
+        updateShareButton();
+    }
+
+    private static void deleteDir(File dir) {
+        if (dir == null || !dir.exists()) return;
+        File[] children = dir.listFiles();
+        if (children != null) for (File child : children) deleteDir(child);
+        dir.delete();
     }
 }
