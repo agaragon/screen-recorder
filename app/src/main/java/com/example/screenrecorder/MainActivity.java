@@ -116,8 +116,9 @@ public class MainActivity extends AppCompatActivity {
     // -----------------------------------------------------------------------
 
     private void startRecordingService(int resultCode, Intent data) {
-        DisplayMetrics metrics = new DisplayMetrics();
-        getWindowManager().getDefaultDisplay().getMetrics(metrics);
+        // getResources().getDisplayMetrics() works correctly on all API levels
+        // without requiring the deprecated Display.getMetrics() call
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
 
         Intent serviceIntent = new Intent(this, ScreenRecorderService.class);
         serviceIntent.setAction(ScreenRecorderService.ACTION_START);
