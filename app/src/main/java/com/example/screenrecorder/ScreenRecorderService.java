@@ -11,9 +11,12 @@ import android.hardware.display.VirtualDisplay;
 import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.os.IBinder;
+import android.os.ParcelFileDescriptor;
+import android.provider.DocumentsContract;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
@@ -25,20 +28,11 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
-/**
- * Foreground service that owns the MediaProjection session and drives
- * MediaRecorder to write an MP4 file to the Movies directory.
- *
- * Lifecycle:
- *   startForegroundService(ACTION_START) → begins recording
- *   startService(ACTION_STOP)            → stops recording and releases resources
- */
 public class ScreenRecorderService extends Service {
 
     private static final String TAG = "ScreenRecorderService";
     private static final int NOTIFICATION_ID = 1;
 
-    // ---- Intent actions & extras ----
     public static final String ACTION_START = "com.example.screenrecorder.START";
     public static final String ACTION_STOP  = "com.example.screenrecorder.STOP";
 
@@ -47,21 +41,17 @@ public class ScreenRecorderService extends Service {
     public static final String EXTRA_SCREEN_WIDTH  = "screen_width";
     public static final String EXTRA_SCREEN_HEIGHT = "screen_height";
     public static final String EXTRA_SCREEN_DPI    = "screen_dpi";
+    public static final String EXTRA_OUTPUT_URI    = "output_uri";
 
-    // ---- Recording components ----
     private MediaProjectionManager projectionManager;
     private MediaProjection         mediaProjection;
     private VirtualDisplay          virtualDisplay;
     private MediaRecorder           mediaRecorder;
+    private ParcelFileDescriptor    outputPfd;
 
-    // ---- Display metrics (filled from Intent extras) ----
     private int screenWidth;
     private int screenHeight;
     private int screenDpi;
-
-    // -----------------------------------------------------------------------
-    // Service callbacks
-    // -----------------------------------------------------------------------
 
     @Override
     public void onCreate() {
@@ -77,7 +67,6 @@ public class ScreenRecorderService extends Service {
 
         switch (intent.getAction() != null ? intent.getAction() : "") {
             case ACTION_START:
-                // Promote to foreground immediately so the OS doesn't kill us
                 startForeground(NOTIFICATION_ID, buildNotification());
 
                 screenWidth  = intent.getIntExtra(EXTRA_SCREEN_WIDTH,  1080);
@@ -86,9 +75,9 @@ public class ScreenRecorderService extends Service {
 
                 int    resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED);
                 Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
+                mediaProjection   = projectionManager.getMediaProjection(resultCode, resultData);
 
-                mediaProjection = projectionManager.getMediaProjection(resultCode, resultData);
-                startRecording();
+                startRecording(intent.getStringExtra(EXTRA_OUTPUT_URI));
                 break;
 
             case ACTION_STOP:
@@ -104,7 +93,7 @@ public class ScreenRecorderService extends Service {
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
-        return null; // not a bound service
+        return null;
     }
 
     @Override
@@ -114,23 +103,50 @@ public class ScreenRecorderService extends Service {
     }
 
     // -----------------------------------------------------------------------
-    // Recording logic
+    // Recording
     // -----------------------------------------------------------------------
 
-    private void startRecording() {
-        String outputPath = buildOutputFilePath();
-
+    private void startRecording(String outputUriString) {
         mediaRecorder = new MediaRecorder();
-        configureMediaRecorder(mediaRecorder, outputPath);
+        mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+        mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+
+        if (outputUriString != null) {
+            try {
+                Uri treeUri = Uri.parse(outputUriString);
+                Uri docUri  = DocumentsContract.buildDocumentUriUsingTree(
+                        treeUri, DocumentsContract.getTreeDocumentId(treeUri));
+                String ts   = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+                Uri fileUri = DocumentsContract.createDocument(
+                        getContentResolver(), docUri, "video/mp4", "recording_" + ts + ".mp4");
+                if (fileUri != null) {
+                    outputPfd = getContentResolver().openFileDescriptor(fileUri, "w");
+                    mediaRecorder.setOutputFile(outputPfd.getFileDescriptor());
+                } else {
+                    mediaRecorder.setOutputFile(buildOutputFilePath());
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "SAF output failed, falling back to Movies dir", e);
+                closeOutputPfd();
+                mediaRecorder.setOutputFile(buildOutputFilePath());
+            }
+        } else {
+            mediaRecorder.setOutputFile(buildOutputFilePath());
+        }
+
+        mediaRecorder.setVideoSize(screenWidth, screenHeight);
+        mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+        mediaRecorder.setVideoEncodingBitRate(5 * 1024 * 1024);
+        mediaRecorder.setVideoFrameRate(30);
 
         try {
             mediaRecorder.prepare();
         } catch (IOException e) {
             Log.e(TAG, "MediaRecorder prepare failed", e);
+            closeOutputPfd();
             return;
         }
 
-        // VirtualDisplay feeds captured frames into the MediaRecorder surface
         virtualDisplay = mediaProjection.createVirtualDisplay(
                 "ScreenRecorder",
                 screenWidth, screenHeight, screenDpi,
@@ -139,20 +155,18 @@ public class ScreenRecorderService extends Service {
                 null, null);
 
         mediaRecorder.start();
-        Log.i(TAG, "Recording started → " + outputPath);
+        Log.i(TAG, "Recording started");
     }
 
     private void stopRecording() {
         if (mediaRecorder != null) {
-            try {
-                mediaRecorder.stop();
-            } catch (RuntimeException e) {
-                // stop() throws if recording never actually began (e.g. error in start)
-                Log.w(TAG, "MediaRecorder stop failed — probably never started", e);
-            }
+            try { mediaRecorder.stop(); }
+            catch (RuntimeException e) { Log.w(TAG, "stop() failed — probably never started", e); }
             mediaRecorder.release();
             mediaRecorder = null;
         }
+
+        closeOutputPfd();
 
         if (virtualDisplay != null) {
             virtualDisplay.release();
@@ -164,51 +178,34 @@ public class ScreenRecorderService extends Service {
             mediaProjection = null;
         }
 
-        Log.i(TAG, "Recording stopped.");
+        Log.i(TAG, "Recording stopped");
     }
 
-    // -----------------------------------------------------------------------
-    // MediaRecorder configuration
-    // -----------------------------------------------------------------------
-
-    /**
-     * Configures the recorder to capture video only (no audio).
-     * Add setAudioSource / setAudioEncoder calls if you need a microphone track.
-     */
-    private void configureMediaRecorder(MediaRecorder recorder, String outputPath) {
-        recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-
-        recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-        recorder.setOutputFile(outputPath);
-
-        recorder.setVideoSize(screenWidth, screenHeight);
-        recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
-        recorder.setVideoEncodingBitRate(5 * 1024 * 1024); // 5 Mbps
-        recorder.setVideoFrameRate(30);
+    private void closeOutputPfd() {
+        if (outputPfd != null) {
+            try { outputPfd.close(); } catch (IOException e) { Log.w(TAG, "close pfd", e); }
+            outputPfd = null;
+        }
     }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
-    /** Returns a timestamped path inside the public Movies directory. */
     private String buildOutputFilePath() {
         File moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
         if (!moviesDir.exists()) moviesDir.mkdirs();
-
-        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
-        return new File(moviesDir, "recording_" + timestamp + ".mp4").getAbsolutePath();
+        String ts = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+        return new File(moviesDir, "recording_" + ts + ".mp4").getAbsolutePath();
     }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             String channelId   = getString(R.string.channel_id);
             String channelName = getString(R.string.channel_name);
-
             NotificationChannel channel = new NotificationChannel(
                     channelId, channelName, NotificationManager.IMPORTANCE_LOW);
             channel.setDescription("Used while a screen recording is in progress.");
-
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) nm.createNotificationChannel(channel);
         }

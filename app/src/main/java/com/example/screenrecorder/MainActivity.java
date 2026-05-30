@@ -2,8 +2,10 @@ package com.example.screenrecorder;
 
 import android.Manifest;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.DisplayMetrics;
@@ -18,20 +20,20 @@ import androidx.core.content.ContextCompat;
 
 public class MainActivity extends AppCompatActivity {
 
-    // Request code used to identify the screen-capture permission result
-    private static final int REQUEST_SCREEN_CAPTURE = 100;
+    private static final String PREFS_NAME = "screen_recorder_prefs";
+    private static final String KEY_OUTPUT_URI = "output_uri";
 
     private MediaProjectionManager projectionManager;
     private boolean isRecording = false;
 
     private Button btnToggle;
     private TextView tvStatus;
+    private TextView tvSaveFolder;
 
     // -----------------------------------------------------------------------
-    // Launchers registered before onCreate (AndroidX Activity Result API)
+    // Launchers
     // -----------------------------------------------------------------------
 
-    // Launcher for the system "Allow display over other apps / capture screen" dialog
     private final ActivityResultLauncher<Intent> screenCaptureLauncher =
             registerForActivityResult(
                     new ActivityResultContracts.StartActivityForResult(),
@@ -44,15 +46,21 @@ public class MainActivity extends AppCompatActivity {
                         }
                     });
 
-    // Launcher for the POST_NOTIFICATIONS runtime permission (Android 13+)
     private final ActivityResultLauncher<String> notificationPermissionLauncher =
             registerForActivityResult(
                     new ActivityResultContracts.RequestPermission(),
-                    granted -> {
-                        // Permission result is informational; we proceed regardless because
-                        // the foreground service can still run without the notification being
-                        // visible on very old API levels where POST_NOTIFICATIONS doesn't exist.
-                        requestScreenCapturePermission();
+                    granted -> requestScreenCapturePermission());
+
+    private final ActivityResultLauncher<Uri> folderPickerLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.OpenDocumentTree(),
+                    uri -> {
+                        if (uri == null) return;
+                        getContentResolver().takePersistableUriPermission(uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                        prefs().edit().putString(KEY_OUTPUT_URI, uri.toString()).apply();
+                        updateFolderLabel();
                     });
 
     // -----------------------------------------------------------------------
@@ -67,27 +75,27 @@ public class MainActivity extends AppCompatActivity {
         projectionManager =
                 (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
 
-        btnToggle = findViewById(R.id.btnToggle);
-        tvStatus  = findViewById(R.id.tvStatus);
+        btnToggle    = findViewById(R.id.btnToggle);
+        tvStatus     = findViewById(R.id.tvStatus);
+        tvSaveFolder = findViewById(R.id.tvSaveFolder);
 
         btnToggle.setOnClickListener(v -> {
-            if (isRecording) {
-                stopRecording();
-            } else {
-                checkPermissionsAndStartRecording();
-            }
+            if (isRecording) stopRecording();
+            else             checkPermissionsAndStartRecording();
         });
+
+        findViewById(R.id.btnChooseFolder).setOnClickListener(v -> {
+            String saved = prefs().getString(KEY_OUTPUT_URI, null);
+            folderPickerLauncher.launch(saved != null ? Uri.parse(saved) : null);
+        });
+
+        updateFolderLabel();
     }
 
     // -----------------------------------------------------------------------
     // Permission flow
     // -----------------------------------------------------------------------
 
-    /**
-     * Entry point for the start-recording flow.
-     * On API 33+ we must hold POST_NOTIFICATIONS before launching the foreground
-     * service; on older versions we go straight to the screen-capture dialog.
-     */
     private void checkPermissionsAndStartRecording() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
@@ -99,37 +107,30 @@ public class MainActivity extends AppCompatActivity {
         requestScreenCapturePermission();
     }
 
-    /**
-     * Shows the system dialog that asks the user to allow this app to capture
-     * the screen. The result is delivered to {@link #screenCaptureLauncher}.
-     */
     private void requestScreenCapturePermission() {
-        Intent captureIntent = projectionManager.createScreenCaptureIntent();
-        screenCaptureLauncher.launch(captureIntent);
+        screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent());
     }
 
     // -----------------------------------------------------------------------
     // Service control
     // -----------------------------------------------------------------------
 
-    /**
-     * Passes the approved MediaProjection token to the recording service and
-     * starts it as a foreground service.
-     *
-     * @param resultCode RESULT_OK from the screen-capture permission dialog
-     * @param data       Intent containing the MediaProjection token
-     */
     private void startRecordingService(int resultCode, Intent data) {
         DisplayMetrics metrics = new DisplayMetrics();
         getWindowManager().getDefaultDisplay().getMetrics(metrics);
 
         Intent serviceIntent = new Intent(this, ScreenRecorderService.class);
         serviceIntent.setAction(ScreenRecorderService.ACTION_START);
-        serviceIntent.putExtra(ScreenRecorderService.EXTRA_RESULT_CODE, resultCode);
-        serviceIntent.putExtra(ScreenRecorderService.EXTRA_RESULT_DATA, data);
+        serviceIntent.putExtra(ScreenRecorderService.EXTRA_RESULT_CODE,   resultCode);
+        serviceIntent.putExtra(ScreenRecorderService.EXTRA_RESULT_DATA,   data);
         serviceIntent.putExtra(ScreenRecorderService.EXTRA_SCREEN_WIDTH,  metrics.widthPixels);
         serviceIntent.putExtra(ScreenRecorderService.EXTRA_SCREEN_HEIGHT, metrics.heightPixels);
         serviceIntent.putExtra(ScreenRecorderService.EXTRA_SCREEN_DPI,    metrics.densityDpi);
+
+        String outputUri = prefs().getString(KEY_OUTPUT_URI, null);
+        if (outputUri != null) {
+            serviceIntent.putExtra(ScreenRecorderService.EXTRA_OUTPUT_URI, outputUri);
+        }
 
         ContextCompat.startForegroundService(this, serviceIntent);
 
@@ -147,16 +148,25 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // -----------------------------------------------------------------------
-    // UI helpers
+    // Helpers
     // -----------------------------------------------------------------------
 
-    private void updateUI() {
-        if (isRecording) {
-            tvStatus.setText(R.string.status_recording);
-            btnToggle.setText(R.string.stop_recording);
+    private SharedPreferences prefs() {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+    }
+
+    private void updateFolderLabel() {
+        String uriString = prefs().getString(KEY_OUTPUT_URI, null);
+        if (uriString == null) {
+            tvSaveFolder.setText(getString(R.string.save_folder_default));
         } else {
-            tvStatus.setText(R.string.status_idle);
-            btnToggle.setText(R.string.start_recording);
+            String segment = Uri.parse(uriString).getLastPathSegment();
+            tvSaveFolder.setText(getString(R.string.save_folder_custom, segment));
         }
+    }
+
+    private void updateUI() {
+        tvStatus.setText(isRecording ? R.string.status_recording : R.string.status_idle);
+        btnToggle.setText(isRecording ? R.string.stop_recording  : R.string.start_recording);
     }
 }
