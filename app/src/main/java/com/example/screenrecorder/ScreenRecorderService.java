@@ -1,5 +1,6 @@
 package com.example.screenrecorder;
 
+import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -83,7 +84,7 @@ public class ScreenRecorderService extends Service {
                 screenHeight = intent.getIntExtra(EXTRA_SCREEN_HEIGHT, 1920);
                 screenDpi    = intent.getIntExtra(EXTRA_SCREEN_DPI,    320);
 
-                int    resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, RESULT_CANCELED);
+                int    resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED);
                 Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
 
                 mediaProjection = projectionManager.getMediaProjection(resultCode, resultData);
