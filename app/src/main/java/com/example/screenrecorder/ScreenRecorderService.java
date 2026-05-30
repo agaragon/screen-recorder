@@ -33,7 +33,9 @@ import java.util.Locale;
 public class ScreenRecorderService extends Service {
 
     private static final String TAG = "ScreenRecorderService";
-    private static final int NOTIFICATION_ID = 1;
+    private static final int    NOTIFICATION_ID = 1;
+    private static final String PREFS_NAME      = "screen_recorder_prefs";
+    private static final String KEY_LAST_RECORDING = "last_recording";
 
     public static final String ACTION_START = "com.example.screenrecorder.START";
     public static final String ACTION_STOP  = "com.example.screenrecorder.STOP";
@@ -50,6 +52,7 @@ public class ScreenRecorderService extends Service {
     private VirtualDisplay          virtualDisplay;
     private MediaRecorder           mediaRecorder;
     private ParcelFileDescriptor    outputPfd;
+    private String                  pendingOutputPath;
 
     private int screenWidth;
     private int screenHeight;
@@ -69,8 +72,7 @@ public class ScreenRecorderService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        projectionManager =
-                (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+        projectionManager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         createNotificationChannel();
     }
 
@@ -108,21 +110,14 @@ public class ScreenRecorderService extends Service {
                 stopSelf();
                 break;
         }
-
         return START_NOT_STICKY;
     }
 
-    @Nullable
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    @Nullable @Override
+    public IBinder onBind(Intent intent) { return null; }
 
     @Override
-    public void onDestroy() {
-        stopRecording();
-        super.onDestroy();
-    }
+    public void onDestroy() { stopRecording(); super.onDestroy(); }
 
     // -----------------------------------------------------------------------
     // Recording
@@ -130,10 +125,8 @@ public class ScreenRecorderService extends Service {
 
     private void startRecording(String outputUriString) {
         mediaRecorder = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                ? new MediaRecorder(this)
-                : new MediaRecorder();
+                ? new MediaRecorder(this) : new MediaRecorder();
 
-        // Audio and video sources must be set before setOutputFormat
         mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
         mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
         mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
@@ -143,22 +136,29 @@ public class ScreenRecorderService extends Service {
                 Uri treeUri = Uri.parse(outputUriString);
                 Uri docUri  = DocumentsContract.buildDocumentUriUsingTree(
                         treeUri, DocumentsContract.getTreeDocumentId(treeUri));
-                String ts   = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+                String ts   = timestamp();
                 Uri fileUri = DocumentsContract.createDocument(
                         getContentResolver(), docUri, "video/mp4", "recording_" + ts + ".mp4");
                 if (fileUri != null) {
                     outputPfd = getContentResolver().openFileDescriptor(fileUri, "w");
                     mediaRecorder.setOutputFile(outputPfd.getFileDescriptor());
+                    pendingOutputPath = fileUri.toString();
                 } else {
-                    mediaRecorder.setOutputFile(buildOutputFilePath());
+                    String path = buildOutputFilePath();
+                    mediaRecorder.setOutputFile(path);
+                    pendingOutputPath = path;
                 }
             } catch (Exception e) {
                 Log.e(TAG, "SAF output failed, falling back to Movies dir", e);
                 closeOutputPfd();
-                mediaRecorder.setOutputFile(buildOutputFilePath());
+                String path = buildOutputFilePath();
+                mediaRecorder.setOutputFile(path);
+                pendingOutputPath = path;
             }
         } else {
-            mediaRecorder.setOutputFile(buildOutputFilePath());
+            String path = buildOutputFilePath();
+            mediaRecorder.setOutputFile(path);
+            pendingOutputPath = path;
         }
 
         mediaRecorder.setVideoSize(screenWidth, screenHeight);
@@ -174,41 +174,45 @@ public class ScreenRecorderService extends Service {
         } catch (IOException e) {
             Log.e(TAG, "MediaRecorder prepare failed", e);
             closeOutputPfd();
+            pendingOutputPath = null;
             return;
         }
 
         virtualDisplay = mediaProjection.createVirtualDisplay(
-                "ScreenRecorder",
-                screenWidth, screenHeight, screenDpi,
+                "ScreenRecorder", screenWidth, screenHeight, screenDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                mediaRecorder.getSurface(),
-                null, null);
+                mediaRecorder.getSurface(), null, null);
 
         mediaRecorder.start();
-        Log.i(TAG, "Recording started at " + screenWidth + "x" + screenHeight + " with audio");
+        Log.i(TAG, "Recording started at " + screenWidth + "x" + screenHeight);
     }
 
     private void stopRecording() {
         if (mediaRecorder != null) {
-            try { mediaRecorder.stop(); }
-            catch (RuntimeException e) { Log.w(TAG, "stop() failed", e); }
+            try {
+                mediaRecorder.stop();
+                if (pendingOutputPath != null) {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                            .edit().putString(KEY_LAST_RECORDING, pendingOutputPath).apply();
+                    Log.i(TAG, "Saved last recording: " + pendingOutputPath);
+                }
+            } catch (RuntimeException e) {
+                Log.w(TAG, "stop() failed", e);
+            }
+            pendingOutputPath = null;
             mediaRecorder.release();
             mediaRecorder = null;
         }
 
         closeOutputPfd();
 
-        if (virtualDisplay != null) {
-            virtualDisplay.release();
-            virtualDisplay = null;
-        }
+        if (virtualDisplay != null) { virtualDisplay.release(); virtualDisplay = null; }
 
         if (mediaProjection != null) {
             mediaProjection.unregisterCallback(projectionCallback);
             mediaProjection.stop();
             mediaProjection = null;
         }
-
         Log.i(TAG, "Recording stopped");
     }
 
@@ -223,27 +227,27 @@ public class ScreenRecorderService extends Service {
     // Helpers
     // -----------------------------------------------------------------------
 
-    /** H.264 hardware encoders require width and height to be multiples of 16. */
-    private static int alignTo16(int value) {
-        return (value / 16) * 16;
-    }
+    private static int alignTo16(int value) { return (value / 16) * 16; }
 
     private String buildOutputFilePath() {
-        File moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
-        if (!moviesDir.exists()) moviesDir.mkdirs();
-        String ts = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
-        return new File(moviesDir, "recording_" + ts + ".mp4").getAbsolutePath();
+        File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
+        if (!dir.exists()) dir.mkdirs();
+        return new File(dir, "recording_" + timestamp() + ".mp4").getAbsolutePath();
+    }
+
+    private static String timestamp() {
+        return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
     }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            String channelId   = getString(R.string.channel_id);
-            String channelName = getString(R.string.channel_name);
-            NotificationChannel channel = new NotificationChannel(
-                    channelId, channelName, NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("Used while a screen recording is in progress.");
+            NotificationChannel ch = new NotificationChannel(
+                    getString(R.string.channel_id),
+                    getString(R.string.channel_name),
+                    NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription("Used while a screen recording is in progress.");
             NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) nm.createNotificationChannel(channel);
+            if (nm != null) nm.createNotificationChannel(ch);
         }
     }
 

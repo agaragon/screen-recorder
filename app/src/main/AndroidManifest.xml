@@ -1,22 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Required to write the recorded video to external storage (API < 29) -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
-
-    <!-- Required to record microphone audio -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-
-    <!-- Required to post the mandatory foreground-service notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- Required for the foreground service that holds the MediaProjection token -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-
-    <!-- Required when foregroundServiceType includes "microphone" (Android 12+) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- Needed on Android 11+ to detect whether Instagram is installed -->
+    <queries>
+        <package android:name="com.instagram.android" />
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -37,6 +33,17 @@
             android:name=".ScreenRecorderService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection|microphone" />
+
+        <!-- Exposes chunk files to Instagram / share targets without exposing raw paths -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.example.screenrecorder.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

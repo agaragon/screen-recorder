@@ -12,4 +12,12 @@
     <string name="choose_folder">Choose Save Folder</string>
     <string name="save_folder_default">Save to: Movies (default)</string>
     <string name="save_folder_custom">Save to: %s</string>
+    <string name="share_to_stories">Share to Stories</string>
+    <string name="share_title">Share video</string>
+    <string name="no_recording">No active video — record something or choose a video first.</string>
+    <string name="preparing_video">Preparing video…</string>
+    <string name="split_into_parts">Video split into %d parts — select all to share each to your Stories.</string>
+    <string name="choose_video">Choose Video</string>
+    <string name="active_video_none">No active video</string>
+    <string name="active_video">Active: %s</string>
 </resources>
