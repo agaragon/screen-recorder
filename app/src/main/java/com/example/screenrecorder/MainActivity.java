@@ -131,7 +131,7 @@ public class MainActivity extends AppCompatActivity {
         serviceIntent.putExtra(ScreenRecorderService.EXTRA_SCREEN_HEIGHT, metrics.heightPixels);
         serviceIntent.putExtra(ScreenRecorderService.EXTRA_SCREEN_DPI,    metrics.densityDpi);
 
-        ContextCompat.startForegroundServiceCompat(this, serviceIntent);
+        ContextCompat.startForegroundService(this, serviceIntent);
 
         isRecording = true;
         updateUI();
