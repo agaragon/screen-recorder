@@ -4,10 +4,12 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.util.DisplayMetrics;
 import android.widget.Button;
 import android.widget.TextView;
@@ -37,6 +39,7 @@ public class MainActivity extends AppCompatActivity {
     private Button   btnShare;
     private TextView tvStatus;
     private TextView tvSaveFolder;
+    private TextView tvActiveVideo;
 
     // -----------------------------------------------------------------------
     // Launchers
@@ -81,6 +84,22 @@ public class MainActivity extends AppCompatActivity {
                         updateFolderLabel();
                     });
 
+    // Opens the system video picker; the selected video becomes the active video
+    private final ActivityResultLauncher<String> videoPickerLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.GetContent(),
+                    uri -> {
+                        if (uri == null) return;
+                        // Best-effort persistable permission (works for SAF URIs)
+                        try {
+                            getContentResolver().takePersistableUriPermission(
+                                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        } catch (SecurityException ignored) {}
+                        prefs().edit().putString(KEY_LAST_RECORDING, uri.toString()).apply();
+                        updateActiveVideoLabel();
+                        updateShareButton();
+                    });
+
     // -----------------------------------------------------------------------
     // Lifecycle
     // -----------------------------------------------------------------------
@@ -96,6 +115,7 @@ public class MainActivity extends AppCompatActivity {
         btnShare     = findViewById(R.id.btnShare);
         tvStatus     = findViewById(R.id.tvStatus);
         tvSaveFolder = findViewById(R.id.tvSaveFolder);
+        tvActiveVideo = findViewById(R.id.tvActiveVideo);
 
         btnToggle.setOnClickListener(v -> {
             if (isRecording) stopRecording();
@@ -104,12 +124,16 @@ public class MainActivity extends AppCompatActivity {
 
         btnShare.setOnClickListener(v -> shareLastRecording());
 
+        findViewById(R.id.btnChooseVideo).setOnClickListener(v ->
+                videoPickerLauncher.launch("video/*"));
+
         findViewById(R.id.btnChooseFolder).setOnClickListener(v -> {
             String saved = prefs().getString(KEY_OUTPUT_URI, null);
             folderPickerLauncher.launch(saved != null ? Uri.parse(saved) : null);
         });
 
         updateFolderLabel();
+        updateActiveVideoLabel();
         updateShareButton();
     }
 
@@ -171,6 +195,11 @@ public class MainActivity extends AppCompatActivity {
         si.setAction(ScreenRecorderService.ACTION_STOP);
         startService(si);
         isRecording = false;
+        // The service saves KEY_LAST_RECORDING to prefs; give it a moment then refresh UI
+        btnToggle.postDelayed(() -> {
+            updateActiveVideoLabel();
+            updateShareButton();
+        }, 500);
         updateUI();
     }
 
@@ -248,6 +277,29 @@ public class MainActivity extends AppCompatActivity {
 
     private SharedPreferences prefs() {
         return getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+    }
+
+    private void updateActiveVideoLabel() {
+        String pathOrUri = prefs().getString(KEY_LAST_RECORDING, null);
+        if (pathOrUri == null) {
+            tvActiveVideo.setText(getString(R.string.active_video_none));
+        } else {
+            tvActiveVideo.setText(getString(R.string.active_video, getDisplayName(pathOrUri)));
+        }
+    }
+
+    /** Returns a human-readable filename for a file path or content URI. */
+    private String getDisplayName(String pathOrUri) {
+        if (pathOrUri.startsWith("content://")) {
+            try (Cursor c = getContentResolver().query(
+                    Uri.parse(pathOrUri),
+                    new String[]{OpenableColumns.DISPLAY_NAME},
+                    null, null, null)) {
+                if (c != null && c.moveToFirst()) return c.getString(0);
+            } catch (Exception ignored) {}
+            return Uri.parse(pathOrUri).getLastPathSegment();
+        }
+        return new File(pathOrUri).getName();
     }
 
     private void updateFolderLabel() {
