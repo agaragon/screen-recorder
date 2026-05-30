@@ -30,10 +30,15 @@
             </intent-filter>
         </activity>
 
+        <!--
+            foregroundServiceType must include both mediaProjection and microphone.
+            Without microphone, Android 12+ revokes mic access when the app
+            goes to the background.
+        -->
         <service
             android:name=".ScreenRecorderService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="mediaProjection|microphone" />
 
     </application>
 
