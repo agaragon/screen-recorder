@@ -55,8 +55,6 @@ public class ScreenRecorderService extends Service {
     private int screenHeight;
     private int screenDpi;
 
-    // Callback required on Android 14+ — stops the service if the projection
-    // is revoked externally (e.g. user pulls down the status bar tile)
     private final MediaProjection.Callback projectionCallback =
             new MediaProjection.Callback() {
                 @Override
@@ -98,7 +96,6 @@ public class ScreenRecorderService extends Service {
                     return START_NOT_STICKY;
                 }
 
-                // Must be registered before createVirtualDisplay on Android 14+
                 mediaProjection.registerCallback(
                         projectionCallback, new Handler(Looper.getMainLooper()));
 
@@ -132,11 +129,12 @@ public class ScreenRecorderService extends Service {
     // -----------------------------------------------------------------------
 
     private void startRecording(String outputUriString) {
-        // Use MediaRecorder(Context) on API 31+; no-arg constructor is deprecated there
         mediaRecorder = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                 ? new MediaRecorder(this)
                 : new MediaRecorder();
 
+        // Audio and video sources must be set before setOutputFormat
+        mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
         mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
         mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
 
@@ -167,6 +165,9 @@ public class ScreenRecorderService extends Service {
         mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
         mediaRecorder.setVideoEncodingBitRate(5 * 1024 * 1024);
         mediaRecorder.setVideoFrameRate(30);
+        mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+        mediaRecorder.setAudioEncodingBitRate(128 * 1024);
+        mediaRecorder.setAudioSamplingRate(44100);
 
         try {
             mediaRecorder.prepare();
@@ -184,7 +185,7 @@ public class ScreenRecorderService extends Service {
                 null, null);
 
         mediaRecorder.start();
-        Log.i(TAG, "Recording started at " + screenWidth + "x" + screenHeight);
+        Log.i(TAG, "Recording started at " + screenWidth + "x" + screenHeight + " with audio");
     }
 
     private void stopRecording() {

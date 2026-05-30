@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Required to record microphone audio -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Required to post the mandatory foreground-service notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -27,11 +30,6 @@
             </intent-filter>
         </activity>
 
-        <!--
-            foregroundServiceType="mediaProjection" is mandatory on API 29+.
-            Without it the system revokes the MediaProjection token when the
-            activity goes to the background.
-        -->
         <service
             android:name=".ScreenRecorderService"
             android:exported="false"
