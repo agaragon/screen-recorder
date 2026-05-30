@@ -46,10 +46,26 @@ public class MainActivity extends AppCompatActivity {
                         }
                     });
 
+    // Chains back into checkPermissionsAndStartRecording so the audio
+    // permission check runs next regardless of whether this was granted.
     private final ActivityResultLauncher<String> notificationPermissionLauncher =
             registerForActivityResult(
                     new ActivityResultContracts.RequestPermission(),
-                    granted -> requestScreenCapturePermission());
+                    granted -> checkPermissionsAndStartRecording());
+
+    private final ActivityResultLauncher<String> audioPermissionLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.RequestPermission(),
+                    granted -> {
+                        if (granted) {
+                            requestScreenCapturePermission();
+                        } else {
+                            Toast.makeText(this,
+                                    "Microphone permission denied — audio will not be recorded.",
+                                    Toast.LENGTH_LONG).show();
+                            requestScreenCapturePermission();
+                        }
+                    });
 
     private final ActivityResultLauncher<Uri> folderPickerLauncher =
             registerForActivityResult(
@@ -93,7 +109,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // -----------------------------------------------------------------------
-    // Permission flow
+    // Permission flow: notifications → microphone → screen capture
     // -----------------------------------------------------------------------
 
     private void checkPermissionsAndStartRecording() {
@@ -103,6 +119,11 @@ public class MainActivity extends AppCompatActivity {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
                 return;
             }
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO);
+            return;
         }
         requestScreenCapturePermission();
     }
@@ -116,8 +137,6 @@ public class MainActivity extends AppCompatActivity {
     // -----------------------------------------------------------------------
 
     private void startRecordingService(int resultCode, Intent data) {
-        // getResources().getDisplayMetrics() works correctly on all API levels
-        // without requiring the deprecated Display.getMetrics() call
         DisplayMetrics metrics = getResources().getDisplayMetrics();
 
         Intent serviceIntent = new Intent(this, ScreenRecorderService.class);
